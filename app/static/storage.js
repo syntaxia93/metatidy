@@ -159,7 +159,7 @@ function validClearResult(result, scope) {
 function clearSummary(result) {
   const unknown = result.uncertain;
   const heading = unknown ? "清理结果暂未确认" : result.complete ? "缓存清理完成" : "缓存部分清理完成";
-  const copy = unknown ? result.message : result.removed_files === 0 && result.failed_entries === 0
+  const copy = unknown ? result.message : result.complete && result.removed_files === 0
     ? "缓存目录中没有可删除的缓存文件。"
     : `已删除 ${ui.fmtNum(result.removed_files)} 个文件，释放 ${ui.fmtBytes(result.removed_bytes)}。跳过 ${ui.fmtNum(result.skipped_entries)} 项，失败 ${ui.fmtNum(result.failed_entries)} 项。`;
   return ui.el("section", { class: `storage-clear-summary ${unknown || !result.complete ? "has-errors" : "is-ok"}` }, [

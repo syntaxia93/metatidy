@@ -167,6 +167,16 @@ try {
     assert.equal(calls.filter(call => call.path === '/api/storage/clear-cache').length, 1);
   }));
 
+  await check('A truncated zero-removal result does not claim the cache is empty', () => withPage(async ({ page, controls }) => {
+    controls.clear.push({ data: { ...success(), complete: false, removed_files: 0, removed_images: 0, removed_metadata: 0,
+      removed_bytes: 0, skipped_entries: 50000, truncated: true } });
+    await ready(page); await openDialog(page); await page.locator('#storage-clear-confirm').click();
+    await page.waitForFunction(() => document.querySelector('#storage-clear-dialog')?.dataset.phase === 'partial');
+    const text = await page.locator('#storage-clear-result').textContent();
+    assert.match(text, /部分清理|未能完整/);
+    assert.doesNotMatch(text, /没有可删除/);
+  }));
+
   await check('Every displayed scope is sent exactly and the default is thumbnails only', async () => {
     for (const scope of ['thumbnails', 'originals', 'all']) await withPage(async ({ page, calls }) => {
       await ready(page); await openDialog(page);

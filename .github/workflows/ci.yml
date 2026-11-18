@@ -314,10 +314,16 @@ jobs:
           grep -q '"engine":"rust"' /tmp/status.json
           grep -q '"postgres":true' /tmp/status.json
           grep -q '"redis":true' /tmp/status.json
+          python3 -c 'import json, pathlib, tomllib; expected = tomllib.loads(pathlib.Path("backend-rs/Cargo.toml").read_text())["package"]["version"]; actual = json.loads(pathlib.Path("/tmp/status.json").read_text())["version"]; assert actual == expected, (actual, expected); print("镜像版本核对通过：", actual)'
           echo "--- 首屏 ---"
           curl -fsS http://127.0.0.1:8080/ -o /tmp/index.html
           grep -qi '<html' /tmp/index.html
           head -c 160 /tmp/index.html; echo
+          curl -fsS http://127.0.0.1:8080/storage.js -o /tmp/storage.js
+          grep -q 'storage-clear-cache' /tmp/storage.js
+          curl -fsS -X POST http://127.0.0.1:8080/api/storage/clear-cache \
+            -H 'Content-Type: application/json' -d '{"scope":"thumbnails"}' -o /tmp/clear-cache.json
+          python3 -c 'import json, pathlib; result = json.loads(pathlib.Path("/tmp/clear-cache.json").read_text()); assert result["scope"] == "thumbnails" and result["complete"] is True and result["removed_files"] == 0 and result["failed_entries"] == 0, result; print("镜像缓存清理接口通过：", result)'
           echo "--- 容器日志尾部 ---"
           docker logs --tail 15 metatidy-smoke || true
           docker rm -f metatidy-smoke

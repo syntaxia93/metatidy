@@ -46,7 +46,7 @@ Web 界面，单容器部署，适合放在 NAS / 小主机上长期跑。
 ### docker compose（推荐）
 
 ```bash
-git clone https://github.com/jasonb589/metatidy.git   # 或者自己写一份 compose
+git clone https://github.com/syntaxia93/metatidy.git   # 或者自己写一份 compose
 cd metatidy
 # 编辑 docker-compose.yml：把 ./music 换成你的真实音乐目录；生产环境记得改掉 postgres 默认密码
 docker compose up -d
@@ -114,7 +114,7 @@ AVIF 质量设为 60，图片处理最多同时进行两份；常见 JPEG、PNG�
 相关缓存会在下次请求时重新生成；如果外部工具保留了文件大小和修改时间，请手动「全量重扫」刷新索引。
 仅删除 `thumbs` / `covers` 缓存不会删除曲库索引，之后访问图片时会重新生成。
 
-### 清理图片缓存（v0.33）
+### 清理图片缓存（v0.32.2）
 
 在「偏好设置 → 存储与运行状态」点击「清理缓存」，选择 AVIF 缩略图、封面原图或全部图片缓存，并确认后执行。
 删除后仍有内嵌封面的歌曲会在下次浏览时重新生成；云盘音乐可能需要再次读取封面。歌手头像缓存存放在独立目录，不受这项操作影响。
