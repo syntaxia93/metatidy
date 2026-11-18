@@ -319,6 +319,45 @@ try {
     await noPreview(page, model);
   }));
 
+  await check('Batch preview keeps all 14 change cards readable and preserves whitespace in old and new values', () => withPage(async ({ page, model }) => {
+    await ready(page);
+    const source = { ...model.full[0], artist: '  旧歌手\n续行  ' };
+    model.full[0] = { ...source };
+    model.rows[0] = light(model.full[0]);
+    const batch = [...model.rows];
+    for (let id = 4; id <= 14; id += 1) {
+      const row = { ...model.rows[0], id, title: `曲目 ${id}`, filename: `${id}.flac`, path: `/fixture-music/批量预览/${id}.flac` };
+      model.rows.push(row);
+      model.full.push({ ...model.full[0], ...row });
+      batch.push(row);
+    }
+    await openBatch(page, batch);
+    await page.locator('#edit-artist').fill('新歌手');
+    await page.locator('#btn-edit-preview').click(); await page.locator('#edit-preview-dialog[open]').waitFor();
+    const layout = await page.locator('#edit-preview-dialog').evaluate(dialog => {
+      const body = dialog.querySelector('.modal-body');
+      const cards = [...body.querySelectorAll(':scope > .diff-track')];
+      return { body: { scrollHeight: body.scrollHeight, clientHeight: body.clientHeight }, cards: cards.map(card => {
+        const header = card.querySelector(':scope > header'), table = card.querySelector(':scope > .diff-table');
+        return { height: card.getBoundingClientRect().height, headerHeight: header.getBoundingClientRect().height,
+          tableHeight: table.getBoundingClientRect().height };
+      }) };
+    });
+    assert.equal(layout.cards.length, 14);
+    assert.ok(layout.body.scrollHeight > layout.body.clientHeight, JSON.stringify(layout));
+    for (const card of layout.cards) {
+      assert.ok(card.height > card.headerHeight + 24, JSON.stringify(card));
+      assert.ok(card.tableHeight > 0, JSON.stringify(card));
+    }
+    assert.equal(await page.locator('#edit-preview-dialog .diff-old').first().textContent(), '  旧歌手\n续行  ');
+    assert.equal(await page.locator('#edit-preview-dialog .diff-new').first().textContent(), '新歌手');
+    assert.equal(await page.locator('#edit-preview-dialog .diff-old').first().evaluate(node => getComputedStyle(node).whiteSpace), 'pre-wrap');
+    assert.equal(await page.locator('#edit-preview-dialog .diff-new').first().evaluate(node => getComputedStyle(node).whiteSpace), 'pre-wrap');
+    await page.screenshot({ path: path.join(out, 'metadata-editor-batch-preview-14.png') });
+    await page.locator('#edit-preview-dialog').getByRole('button', { name: '取消' }).click();
+    assert.equal(await page.locator('dialog[open]').count(), 0);
+  }));
+
   await check('Incomplete batch snapshots show unknown fields and send extra fields only after explicit input', () => withPage(async ({ page, model }) => {
     await ready(page);
     const rows = model.rows.slice(0, 2).map(row => ({ ...row }));
