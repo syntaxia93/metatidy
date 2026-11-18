@@ -140,16 +140,16 @@ def check_cache_clear(base, data_dir: Path, music_dir: Path, check) -> None:
               and result["removed_images"] == 2 and result["removed_metadata"] == 1
               and result["removed_files"] == 3 and result["removed_bytes"] == sum(map(len, (b"original", b"original-meta", b"legacy")))
               and not cover_image.exists() and not cover_metadata.exists()
-              and files[portraits / f"{suffix}.avif"].exists(), str(result))
+              and (portraits / f"{suffix}.avif").exists(), str(result))
 
         repeat = requests.post(f"{base}/api/storage/clear-cache", json={"scope": "all"}, timeout=30).json()
         check("重复清理幂等且准确保留音乐、数据库与头像", repeat["complete"] and repeat["removed_files"] == 0
               and _music_snapshot(music_dir) == before_music
               and _database_snapshot() == before_database
-              and files[portraits / f"{suffix}.avif"].exists(), str(repeat))
+              and (portraits / f"{suffix}.avif").exists(), str(repeat))
 
         if link is not None:
-            check("清理跳过缩略图缓存目录内的符号链接且保留目标", link.is_symlink() and files[thumb_image].exists(), str(link))
+            check("清理跳过缩略图缓存目录内的符号链接且保留目标", link.is_symlink() and thumb_image.exists(), str(link))
         unsafe_thumb = data_dir / "thumbs"
         saved_thumb_directory = unsafe_thumb.with_name(f"thumbs-test-backup-{suffix}")
         unsafe_thumb.rename(saved_thumb_directory)
