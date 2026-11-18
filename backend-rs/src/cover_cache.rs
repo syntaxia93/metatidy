@@ -10,6 +10,7 @@ use anyhow::{ensure, Context};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 use tokio::sync::Semaphore;
 
 use crate::{config::Config, cover_images, models::Track, tagio};
@@ -23,6 +24,18 @@ static WORKERS: Lazy<Arc<Semaphore>> = Lazy::new(|| Arc::new(Semaphore::new(2)))
 // after the first has published it, instead of repeating an expensive encode.
 static TRACK_LOCKS: Lazy<Vec<Arc<Semaphore>>> =
     Lazy::new(|| (0..64).map(|_| Arc::new(Semaphore::new(1))).collect());
+// Explicit cache cleanup takes the write side. Keep the owned read guard inside
+// the blocking task so a disconnected HTTP request cannot expose files midway
+// through a cache read or publish.
+static CACHE_ACCESS: Lazy<Arc<RwLock<()>>> = Lazy::new(|| Arc::new(RwLock::new(())));
+
+pub(crate) async fn cache_read_guard() -> OwnedRwLockReadGuard<()> {
+    CACHE_ACCESS.clone().read_owned().await
+}
+
+pub(crate) async fn cache_write_guard() -> OwnedRwLockWriteGuard<()> {
+    CACHE_ACCESS.clone().write_owned().await
+}
 
 pub struct CoverData {
     pub bytes: Vec<u8>,
@@ -57,7 +70,11 @@ pub async fn load(
     let slot = (track.id.unsigned_abs() % TRACK_LOCKS.len() as u64) as usize;
     let track_lock = TRACK_LOCKS[slot].clone().acquire_owned().await?;
     let worker = WORKERS.clone().acquire_owned().await?;
+    // Keep lock acquisition order worker -> cache read, matching explicit
+    // cleanup (worker -> cache write) and preventing a read/write deadlock.
+    let cache_guard = cache_read_guard().await;
     tokio::task::spawn_blocking(move || {
+        let _cache_guard = cache_guard;
         let _track_lock = track_lock;
         let _worker = worker;
         load_blocking(&config, &track, edge)

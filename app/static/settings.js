@@ -134,6 +134,10 @@ export function onSettings() {
   fillForm();
 }
 
+export function leave() {
+  storage.leave();
+}
+
 function fillForm() {
   const values = state.settings?.values || {};
   for (const [key, id] of Object.entries(SETTING_IDS)) {

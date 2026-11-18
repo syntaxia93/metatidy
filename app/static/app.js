@@ -407,6 +407,7 @@ async function activateTab(name, { focus = true, dismissSidebar = true, scroll =
   const changed = name !== state.tab;
   if (changed) closeFilenameTags({ restoreFocus: false });
   if (state.tab === "tracks" && name !== "tracks") tracks.leave();
+  if (state.tab === "settings" && name !== "settings") settings.leave();
   if (state.tab === "albums" && name !== "albums") albums.leave();
   if (state.tab === "artists" && name !== "artists") artists.leave();
   if (state.tab === "collections" && name !== "collections") collections.leave();
@@ -480,6 +481,7 @@ function canUseWorkspace() {
 
 function setWorkspaceLocked(locked) {
   if (locked) {
+    settings.leave();
     closeFilenameTags({ restoreFocus: false });
     tracks.leave();
     closeSidebar({ restoreFocus: false });

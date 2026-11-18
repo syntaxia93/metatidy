@@ -812,6 +812,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/status", get(status::api_status))
         .route("/api/storage", get(storage::info))
         .route("/api/storage/check", post(storage::check))
+        .route("/api/storage/clear-cache", post(storage::clear_cache))
         .route(
             "/api/settings",
             get(status::get_settings).put(status::put_settings),

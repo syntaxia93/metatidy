@@ -1,12 +1,28 @@
 /** On-demand storage diagnostics. Never infer the Docker host's bind paths. */
 import { request } from "./api.js";
 import * as ui from "./ui.js";
+import * as auth from "./auth.js";
+import { state } from "./store.js";
 
 let nodes = null;
 let status = {};
 let snapshot = null;
 let attempted = false;
 let pending = null;
+let clearPending = null;
+let clearDialog = null;
+let clearGeneration = 0;
+let lastClearResult = null;
+let accessBlocked = false;
+let generation = 0;
+let refreshController = null;
+let accessGeneration = 0;
+const SCOPES = { thumbnails: "AVIF 缩略图", originals: "封面原图", all: "全部图片缓存" };
+const focusable = node => node?.isConnected && node.getClientRects().length && !node.closest("[inert]") && !node.matches(":disabled");
+function usable() {
+  const session = auth.current();
+  return !accessBlocked && state.tab === "settings" && (!session.required || session.authenticated) && !document.querySelector(".app-content")?.inert;
+}
 
 export function init(statusKv, reload) {
   if (nodes) return;
@@ -20,6 +36,7 @@ export function init(statusKv, reload) {
   const breakdown = ui.el("div", { class: "storage-breakdown" });
   const checked = ui.el("span", { id: "storage-checked-at", class: "hint" });
   const feedback = ui.el("div", { id: "storage-feedback", class: "storage-feedback", role: "status", "aria-live": "polite" });
+  const clearResult = ui.el("div", { id: "storage-clear-result", class: "storage-clear-result", role: "status", "aria-live": "polite" });
   const check = ui.el("button", {
     id: "storage-check-write", type: "button", class: "btn btn-primary", text: "检查缓存写入",
     onClick: () => refresh({ checkWrite: true }),
@@ -27,6 +44,10 @@ export function init(statusKv, reload) {
   const copy = ui.el("button", {
     id: "storage-copy-report", type: "button", class: "btn", text: "复制诊断信息", disabled: true,
     onClick: copyReport,
+  });
+  const clear = ui.el("button", {
+    id: "storage-clear-cache", type: "button", class: "btn btn-primary", text: "清理缓存",
+    onClick: () => openClearDialog(),
   });
   const locationNote = ui.el("p", { id: "storage-host-note", class: "hint storage-host-note" });
   const details = ui.el("details", { class: "storage-service-details" }, [
@@ -37,12 +58,12 @@ export function init(statusKv, reload) {
     ui.el("p", { class: "storage-intro", text: "音乐留在曲库，图片按需缓存，设置保存在数据库。" }),
     cards, breakdown,
     ui.el("div", { class: "storage-actions" }, [
-      ui.el("div", { class: "storage-action-buttons" }, [check, copy]), checked,
+      ui.el("div", { class: "storage-action-buttons" }, [check, copy, clear]), checked,
     ]),
     ui.el("p", { class: "hint storage-probe-note", text: "写入检查会创建缺少的缓存目录，并创建后立即删除一个临时文件；不会修改音乐或目录权限。" }),
-    feedback, locationNote, details,
+    feedback, clearResult, locationNote, details,
   );
-  nodes = { cards, breakdown, feedback, check, copy, reload, checked, statusKv, locationNote };
+  nodes = { cards, breakdown, feedback, clearResult, check, copy, clear, reload, checked, statusKv, locationNote };
   reload.addEventListener("click", () => refresh());
   render();
 }
@@ -63,39 +84,198 @@ export function onStatus(value) {
 }
 
 export function ensureLoaded() {
-  return attempted ? pending || Promise.resolve() : refresh();
+  return usable() ? attempted ? pending || clearPending || Promise.resolve() : refresh() : Promise.resolve();
 }
 
 export function refresh({ checkWrite = false } = {}) {
-  if (!nodes) return Promise.resolve();
-  if (pending) return pending;
+  if (!nodes || !usable()) return Promise.resolve();
+  if (pending || clearPending) return pending || clearPending;
   attempted = true;
+  const token = ++generation;
+  refreshController = new AbortController();
+  const controller = refreshController;
   setBusy(true, checkWrite);
   nodes.feedback.replaceChildren(ui.loadingLine(checkWrite ? "正在以应用用户检查缓存写入…" : "正在读取缓存用量…"));
   pending = (async () => {
     try {
-      snapshot = await request(checkWrite ? "/api/storage/check" : "/api/storage", {
-        method: checkWrite ? "POST" : "GET", timeout: 45000,
+      const data = await request(checkWrite ? "/api/storage/check" : "/api/storage", {
+        method: checkWrite ? "POST" : "GET", timeout: 45000, signal: controller.signal,
       });
+      if (token !== generation || !usable()) return;
+      snapshot = data;
       render();
       renderWriteChecks();
+      renderClearResult();
     } catch (error) {
-      nodes.feedback.replaceChildren(ui.notice("err", `暂时无法读取存储诊断：${error.message}。可点击「刷新用量」重试。`));
+      if (token !== generation || !usable()) return;
+      const notice = ui.notice("err", `暂时无法读取存储诊断：${error.message}。可点击「刷新用量」重试。`);
+      if (lastClearResult) {
+        nodes.feedback.replaceChildren(notice);
+        renderClearResult();
+      } else nodes.feedback.replaceChildren(notice);
     } finally {
-      pending = null;
-      setBusy(false);
+      if (token === generation) { pending = null; refreshController = null; setBusy(false); }
     }
   })();
   return pending;
 }
 
 function setBusy(busy, checking = false) {
-  nodes.reload.disabled = busy;
-  nodes.check.disabled = busy;
-  nodes.copy.disabled = busy || !snapshot;
+  if (!nodes) return;
+  const locked = busy || Boolean(clearPending) || accessBlocked;
+  nodes.reload.disabled = locked;
+  nodes.check.disabled = locked;
+  nodes.clear.disabled = locked;
+  nodes.copy.disabled = locked || !snapshot;
   nodes.check.textContent = busy && checking ? "正在检查…" : "检查缓存写入";
-  nodes.cards.setAttribute("aria-busy", String(busy));
+  nodes.clear.textContent = clearPending ? "正在清理…" : "清理缓存";
+  nodes.cards.setAttribute("aria-busy", String(locked));
 }
+
+export function leave() {
+  generation += 1;
+  refreshController?.abort(); refreshController = null; pending = null; attempted = false;
+  clearDialog?.({ restoreFocus: false });
+  setBusy(false);
+}
+
+function scopeEstimate(scope) {
+  const buckets = (scope === "all" ? ["thumbnails", "originals"] : [scope]).map(key => snapshot?.cache?.[key]);
+  if (!snapshot || buckets.some(item => !item || item.error)) return "用量未能完整统计";
+  return `${buckets.some(item => item.truncated) ? "至少 " : "约 "}${ui.fmtNum(buckets.reduce((sum, item) => sum + number(item.files), 0))} 份 · ${ui.fmtBytes(buckets.reduce((sum, item) => sum + number(item.bytes), 0))}`;
+}
+
+function validClearResult(result, scope) {
+  const count = value => Number.isSafeInteger(value) && value >= 0;
+  return result && typeof result === "object" && result.scope === scope && typeof result.complete === "boolean"
+    && ["removed_files", "removed_images", "removed_metadata", "removed_bytes", "skipped_entries", "failed_entries"].every(key => count(result[key]))
+    && typeof result.finished_at === "number" && Number.isFinite(result.finished_at) && result.finished_at > 0
+    && typeof result.truncated === "boolean" && Array.isArray(result.errors) && result.errors.length <= 20
+    && result.removed_files === result.removed_images + result.removed_metadata
+    && result.complete === (result.failed_entries === 0 && !result.truncated && result.errors.length === 0)
+    && result.errors.every(item => item && typeof item.path === "string" && typeof item.message === "string");
+}
+
+function clearSummary(result) {
+  const unknown = result.uncertain;
+  const heading = unknown ? "清理结果暂未确认" : result.complete ? "缓存清理完成" : "缓存部分清理完成";
+  const copy = unknown ? result.message : result.removed_files === 0 && result.failed_entries === 0
+    ? "缓存目录中没有可删除的缓存文件。"
+    : `已删除 ${ui.fmtNum(result.removed_files)} 个文件，释放 ${ui.fmtBytes(result.removed_bytes)}。跳过 ${ui.fmtNum(result.skipped_entries)} 项，失败 ${ui.fmtNum(result.failed_entries)} 项。`;
+  return ui.el("section", { class: `storage-clear-summary ${unknown || !result.complete ? "has-errors" : "is-ok"}` }, [
+    ui.el("strong", { text: heading }), ui.el("p", { text: copy }),
+    unknown ? ui.el("p", { class: "hint", text: "服务器可能已清理部分缓存。请刷新用量核对；不会自动再次清理。" })
+      : ui.el("p", { class: "hint", text: `图片 ${ui.fmtNum(result.removed_images)} 份 · 配套校验文件 ${ui.fmtNum(result.removed_metadata)} 份` }),
+    result.truncated ? ui.el("p", { class: "hint", text: "本次处理或错误信息未能完整返回，可刷新用量检查剩余缓存。" }) : null,
+    result.refresh_error ? ui.el("p", { class: "hint", text: `清理结果已保留，但最新用量读取失败：${result.refresh_error}。可刷新用量重试。` }) : null,
+    result.errors?.length ? ui.el("details", { class: "storage-clear-errors" }, [ui.el("summary", { text: `查看 ${ui.fmtNum(result.errors.length)} 条错误` }),
+      ui.el("ul", {}, result.errors.map(item => ui.el("li", {}, [ui.el("code", { text: item.path }), ui.el("span", { text: item.message })])))]) : null,
+  ]);
+}
+
+function renderClearResult() {
+  if (!nodes) return;
+  nodes.clearResult.replaceChildren(...(lastClearResult ? [clearSummary(lastClearResult)] : []));
+}
+
+function openClearDialog() {
+  if (!nodes || !usable() || pending || clearPending || clearDialog || document.querySelector("dialog[open]")) return;
+  const opener = document.activeElement;
+  const token = ++clearGeneration;
+  let closed = false, sent = false, finished = false;
+  let selected = "thumbnails";
+  const dialog = ui.el("dialog", { id: "storage-clear-dialog", class: "storage-clear-dialog", "aria-labelledby": "storage-clear-title", "aria-describedby": "storage-clear-description" });
+  const title = ui.el("h2", { id: "storage-clear-title", text: "清理图片缓存", tabindex: "-1" });
+  const closeButton = ui.el("button", { id: "storage-clear-close", type: "button", class: "btn btn-sm btn-ghost", "aria-label": "关闭缓存清理", text: "关闭", onClick: () => close() });
+  const description = ui.el("p", { id: "storage-clear-description", class: "storage-clear-description", text: "音乐文件、曲库索引、设置、任务记录和歌手头像会保留。清理的图片会在下次浏览时重建，云盘音乐可能需要重新读取。" });
+  const estimate = ui.el("p", { id: "storage-clear-estimate", class: "storage-clear-estimate", text: `${scopeEstimate(selected)}（统计仅供参考）` });
+  const progress = ui.el("div", { id: "storage-clear-status", class: "storage-clear-status", role: "status", "aria-live": "polite" });
+  const choiceInputs = [];
+  const choices = ui.el("fieldset", { id: "storage-clear-scopes", class: "storage-clear-scopes" }, [ui.el("legend", { text: "清理范围" })]);
+  for (const [value, label] of Object.entries(SCOPES)) {
+    const radio = ui.el("input", { type: "radio", name: "cache-scope", value, checked: value === selected });
+    const option = ui.el("label", { class: "storage-clear-option", dataset: { selected: String(value === selected) } }, [radio,
+      ui.el("span", {}, [ui.el("strong", { text: label }), ui.el("span", { text: value === "thumbnails" ? "128 / 256 / 512px 图片" : value === "originals" ? "已缓存的封面原始图片" : "缩略图、封面原图及配套校验文件" })])]);
+    radio.addEventListener("change", () => {
+      if (closed || sent || !radio.checked) return;
+      selected = value;
+      for (const input of choiceInputs) input.closest("label").dataset.selected = String(input.checked);
+      estimate.textContent = `${scopeEstimate(selected)}（统计仅供参考）`;
+    });
+    choiceInputs.push(radio); choices.append(option);
+  }
+  const cancel = ui.el("button", { id: "storage-clear-cancel", type: "button", class: "btn", text: "取消", onClick: () => close() });
+  const confirm = ui.el("button", { id: "storage-clear-confirm", type: "button", class: "btn btn-primary", text: "确认清理", onClick: () => void performClear() });
+  dialog.append(ui.el("header", { class: "storage-clear-head" }, [ui.el("div", {}, [ui.el("p", { class: "eyebrow", text: "CACHE MAINTENANCE" }), title]), closeButton]),
+    ui.el("div", { class: "storage-clear-body" }, [description, choices, estimate, progress]), ui.el("footer", { class: "storage-clear-actions" }, [cancel, confirm]));
+
+  function current() { return !closed && token === clearGeneration && dialog.open && dialog.isConnected && usable(); }
+  function close({ restoreFocus = true } = {}) {
+    if (closed) return;
+    closed = true;
+    if (clearDialog === close) clearDialog = null;
+    if (dialog.open) dialog.close(); dialog.remove();
+    if (sent && !finished && clearPending && !accessBlocked) {
+      lastClearResult = { uncertain: true, message: "已关闭清理窗口；请求可能仍在服务端处理中。" };
+      attempted = false;
+      renderClearResult();
+    }
+    if (restoreFocus && usable()) [opener, nodes?.clear, nodes?.reload].find(focusable)?.focus({ preventScroll: true });
+  }
+  async function performClear() {
+    if (!current() || sent || clearPending || pending) return;
+    const scope = selected, lifetime = generation, access = accessGeneration;
+    sent = true; dialog.dataset.phase = "clearing";
+    confirm.disabled = true; confirm.textContent = "正在清理…"; cancel.textContent = "关闭窗口";
+    for (const input of choiceInputs) input.disabled = true;
+    progress.replaceChildren(ui.loadingLine(`正在清理${SCOPES[scope]}…`));
+    if (!current() || lifetime !== generation || access !== accessGeneration) return;
+    const operation = request("/api/storage/clear-cache", { method: "POST", body: { scope }, timeout: 60000 });
+    clearPending = operation; setBusy(false);
+    try {
+      const result = await operation;
+      if (!validClearResult(result, scope)) throw new Error("返回的清理范围或数量不完整");
+      if (!current() || lifetime !== generation) return;
+      finished = true;
+      lastClearResult = result; renderClearResult();
+      progress.replaceChildren(clearSummary(result));
+      dialog.dataset.phase = result.complete ? "done" : "partial";
+      confirm.hidden = true; cancel.textContent = "完成";
+      const data = await request("/api/storage", { timeout: 45000 });
+      if (!current() || lifetime !== generation) return;
+      snapshot = data; attempted = true; render(); renderWriteChecks();
+    } catch (error) {
+      if (!current() || lifetime !== generation) return;
+      if (lastClearResult && !lastClearResult.uncertain && dialog.dataset.phase !== "clearing") {
+        lastClearResult = { ...lastClearResult, refresh_error: error.message }; renderClearResult();
+        progress.replaceChildren(clearSummary(lastClearResult));
+      } else {
+        lastClearResult = { uncertain: true, message: `无法确认清理结果：${error.message}` }; renderClearResult();
+        progress.replaceChildren(clearSummary(lastClearResult)); dialog.dataset.phase = "unknown";
+        confirm.hidden = true; cancel.textContent = "关闭";
+      }
+      attempted = false;
+    } finally {
+      if (clearPending === operation) clearPending = null;
+      setBusy(Boolean(pending));
+      if (current() && (document.activeElement === document.body || !focusable(document.activeElement))) cancel.focus({ preventScroll: true });
+    }
+  }
+  clearDialog = close; dialog.dataset.phase = "choosing";
+  dialog.addEventListener("cancel", event => { event.preventDefault(); close(); });
+  dialog.addEventListener("close", () => close());
+  document.body.append(dialog); dialog.showModal(); choiceInputs[0].focus({ preventScroll: true });
+}
+
+for (const event of ["metatidy:unauthorized", "metatidy:logout"]) window.addEventListener(event, () => {
+  accessGeneration += 1; accessBlocked = true; leave(); snapshot = null; lastClearResult = null; status = {};
+  if (nodes) { renderClearResult(); nodes.feedback.replaceChildren(); render(); }
+});
+window.addEventListener("metatidy:authenticated", () => {
+  accessBlocked = false;
+  attempted = false;
+  setBusy(Boolean(pending || clearPending));
+});
 
 function pill(text, tone = "neutral") {
   return ui.el("span", { class: `storage-pill storage-pill-${tone}`, text });

@@ -33,7 +33,7 @@ sys.path.insert(0, str(REPO))
 from tests.audiofix import make_flac  # noqa: E402
 from tests.cover_acceptance import check_covers, seed_cover_fixtures  # noqa: E402
 from tests.auto_scan_acceptance import check_auto_scan  # noqa: E402
-from tests.storage_acceptance import check_storage, check_cache_totals  # noqa: E402
+from tests.storage_acceptance import check_storage, check_cache_totals, check_cache_clear  # noqa: E402
 from tests.albums_acceptance import check_albums  # noqa: E402
 from tests.artists_acceptance import check_artists  # noqa: E402
 from tests.write_acceptance import check_writes  # noqa: E402
@@ -165,6 +165,7 @@ def main() -> int:
         check("增量扫描跳过未变动文件", skipped == 5, f"skipped={skipped}")
 
         print("\n=== 1.1. AVIF 封面缩略图 ===")
+        check_cache_clear(BASE, data, music, check)
         check_covers(BASE, listing["items"], data, check, wait_job)
         check_cache_totals(BASE, data, check)
 

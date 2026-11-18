@@ -12,7 +12,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: syntaxia93/metatidy
 
 jobs:
   ui:
@@ -33,6 +33,7 @@ jobs:
           PLAYWRIGHT_MODULE: ${{ runner.temp }}/metatidy-ui/node_modules/playwright
         run: |
           node tests/ui-smoke.mjs
+          node tests/ui-cache-cleanup.mjs
           node tests/ui-layout.mjs
           node tests/ui-filtered-selection.mjs
           node tests/ui-palette.mjs

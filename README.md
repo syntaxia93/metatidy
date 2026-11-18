@@ -13,6 +13,7 @@
 9. **跨页整批选择** —— 按目录、搜索和标签筛出目标后，一次准备全部结果，核对数量再追加，接着保存清单或批量处理。
 10. **从文件名提取标签** —— 按模板提取标题、艺术家、专辑与曲序，读取真实文件标签后逐曲预览，确认后写入并保留完整处理结果。
 11. **艺术家收藏** —— 按艺术家浏览关联专辑和全部曲目，区分合辑贡献与整张专辑统计，进入专辑后可返回原来的分页和位置。
+12. **图片缓存清理** —— 在存储设置中分别清理 AVIF 缩略图、封面原图缓存或两者；操作不会删除音乐、曲库索引、设置、任务记录或歌手头像。
 
 Web 界面，单容器部署，适合放在 NAS / 小主机上长期跑。
 
@@ -40,7 +41,7 @@ Web 界面，单容器部署，适合放在 NAS / 小主机上长期跑。
 
 ## 快速开始（Docker）
 
-> 镜像已公开：`docker pull ghcr.io/jasonb589/metatidy:latest` 直接可用，不需要登录。
+> 镜像已公开：`docker pull ghcr.io/syntaxia93/metatidy:latest` 直接可用，不需要登录。
 
 ### docker compose（推荐）
 
@@ -68,7 +69,7 @@ docker run -d --name metatidy \
   -e METATIDY_SCAN_WORKERS=4 \
   -e TZ=Asia/Shanghai \
   --restart unless-stopped \
-  ghcr.io/jasonb589/metatidy:latest
+  ghcr.io/syntaxia93/metatidy:latest
 ```
 
 打开 `http://<主机IP>:8080/`。界面右上角有**浅色 / 深色**切换，默认跟随系统，手动切过一次后会记住。
@@ -112,6 +113,13 @@ AVIF 质量设为 60，图片处理最多同时进行两份；常见 JPEG、PNG�
 旧版 `.jpg` 缓存会在相应图片下次被访问、AVIF 成功生成后逐步替换。写标签、写封面或重新扫描更新索引后，
 相关缓存会在下次请求时重新生成；如果外部工具保留了文件大小和修改时间，请手动「全量重扫」刷新索引。
 仅删除 `thumbs` / `covers` 缓存不会删除曲库索引，之后访问图片时会重新生成。
+
+### 清理图片缓存（v0.33）
+
+在「偏好设置 → 存储与运行状态」点击「清理缓存」，选择 AVIF 缩略图、封面原图或全部图片缓存，并确认后执行。
+删除后仍有内嵌封面的歌曲会在下次浏览时重新生成；云盘音乐可能需要再次读取封面。歌手头像缓存存放在独立目录，不受这项操作影响。
+接口只处理 `/data/thumbs` 与 `/data/covers` 内文件名符合应用格式的普通文件，不递归进入子目录；未知文件、符号链接和目录会保留。
+真实服务用户若无法删除部分文件，会显示已删除数量与失败路径，完成状态会标明部分清理。
 
 ---
 
@@ -604,6 +612,7 @@ node tests/ui-preview.mjs
 
 ```bash
 node tests/ui-smoke.mjs
+node tests/ui-cache-cleanup.mjs
 node tests/ui-layout.mjs
 node tests/ui-filtered-selection.mjs
 node tests/ui-palette.mjs
@@ -796,7 +805,7 @@ CI 会用固定版本 Playwright 在 Chromium 中运行这些浏览器验收，�
 
 推到 `main` 或打 `v*` 标签，GitHub Actions 会执行：单元测试 + 三个自检 + **端到端验收**
 （打真实二进制，带真 Postgres / Redis / 真实数据源），同时运行 **浏览器交互验收**。全部通过后构建 `linux/amd64` + `linux/arm64`
-双架构镜像 → 推送到 `ghcr.io/jasonb589/metatidy`。
+双架构镜像 → 推送到 `ghcr.io/syntaxia93/metatidy`。
 
 镜像用 `backend-rs/Dockerfile` 构建：里面是**编译后的后端二进制**与浏览器需要的 HTML / CSS / JavaScript，不包含 Rust 后端源码；
 依赖版本由 `backend-rs/Cargo.lock` 固定，构建可复现。
