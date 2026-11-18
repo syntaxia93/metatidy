@@ -130,7 +130,7 @@ def check_cache_clear(base, data_dir: Path, music_dir: Path, check) -> None:
               and result["removed_metadata"] == 1 and result["removed_files"] == 2
               and result["removed_bytes"] == len(b"thumb") + len(b"thumb-meta")
               and not thumb_image.exists() and not thumb_metadata.exists()
-              and files[thumbs / "keep.tmp"] == (thumbs / "keep.tmp").read_bytes()
+              and (thumbs / "keep.tmp").read_bytes() == files[thumbs / "keep.tmp"]
           and nested_file.exists() and (link is None or link.is_symlink()), str(result))
 
         cleared = requests.post(f"{base}/api/storage/clear-cache", json={"scope": "originals"}, timeout=30)
